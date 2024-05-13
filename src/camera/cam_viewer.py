@@ -11,7 +11,7 @@ class CompressedImageViewer(Node):
         super().__init__('compressed_image_viewer')
         self.subscription = self.create_subscription(
             CompressedImage,
-            '/tags/image/compressed',
+            '/olive/camera/cam07/tags/image/compressed',
             self.image_callback,
             qos_profile=qos_profile_sensor_data)
         self.subscription  # prevent unused variable warning
