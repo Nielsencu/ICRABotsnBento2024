@@ -6,7 +6,11 @@ import threading
 import time
 import numpy as np
 import cv2
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, CompressedImage
+from rclpy.qos import qos_profile_sensor_data
+from enum import Enum
+from global_planner import get_global_plan, get_global_plan_to_unexplored
+from collections import deque
 
 MAP_WIDTH_M = 5
 MAP_HEIGHT_M = 5
@@ -16,6 +20,12 @@ MAP_RES = 0.01 # in meters
 MAP_WIDTH_IN_PIXELS = int(MAP_WIDTH_M / MAP_RES)
 MAP_HEIGHT_IN_PIXELS = int(MAP_HEIGHT_M / MAP_RES)
 
+class RobotState(Enum):
+    EXPLORATION = 0
+    KLT_DETECTED = 1
+    GRIPPING = 2
+    PARKING = 3
+
 class MainNode(Node):
     def __init__(self, config_path, node_name):
         super().__init__(node_name)
@@ -23,13 +33,20 @@ class MainNode(Node):
         self.robot_map = np.zeros((MAP_WIDTH_IN_PIXELS, MAP_HEIGHT_IN_PIXELS))
         
         # Subscription to wheel encoder
-        self.joint_pub = self.create_subscription(JointState, 'joint_states', self.joint_state_cb, QoSProfile(depth=10))
+        self.joint_sub = self.create_subscription(JointState, 'joint_states', self.joint_state_cb, QoSProfile(depth=10))
+        
+        # Subscribe to ground camera 
+        self.ground_camera_sub = self.create_subscription(
+            CompressedImage,
+            '/olive/camera/cam07/tags/image/compressed',
+            self.ground_camera_cb,
+            qos_profile=qos_profile_sensor_data)
         
         # TODO: Implement IMU subscription to get the header
+        self.imu_sub = None
         
         # TODO: Create Finite state machines tfor exploration, detection of KLT and grabbing 
-        
-        # TODO: Implement exploration part
+        self.state = RobotState.EXPLORATION
         
         self.thread_main = threading.Thread(target=self.thread_main)
         self.thread_exited = False
@@ -42,15 +59,51 @@ class MainNode(Node):
         
         self.prev_joint_msg = None
         
+        self.plan = None
+        self.curID = 0
+        
         # Set up the window for fullscreen or maximizable
         cv2.namedWindow("robotmap", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("robotmap", MAP_WIDTH_IN_PIXELS, MAP_HEIGHT_IN_PIXELS)  # Optional: Set an initial window size
+        
+    def ground_camera_cb(self, msg):
+        np_arr = np.frombuffer(msg.data, np.uint8)
+        cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)  # Convert to OpenCV image
+        
+        # TODO: If ar tags detected, update x and y positions
+        
 
     def thread_main(self):
         time.sleep(1)
         
         while not self.thread_exited:            
             time.sleep(1 / self.rate_control_hz)
+            curPosInPixels = (self.x / MAP_RES, self.y / MAP_RES)
+            
+            # For each of the robot states, publish cmd_vel
+            if self.state == RobotState.EXPLORATION:
+                self.plan = get_global_plan_to_unexplored(curPosInPixels, self.robot_map)
+                self.curID = 1
+                
+                # TODO: Compute linear and angular velocity from the target point
+                
+            elif self.state == RobotState.KLT_DETECTED:
+                # TODO: Try to orientate and find the best gripping position
+                ...
+                
+            elif self.state == RobotState.GRIPPING:
+                # TODO: Command the servo motor to perform the gripping until successful
+                ...
+                
+            elif self.state == RobotState.PARKING:
+                # TODO: Get the correct AR Tag ID from the detection, and use 
+                # a dictionary to get the corresponding parking location in the map
+                
+                parkingGoalInPixels = 0.0, 0.0
+                self.plan = get_global_plan(curPosInPixels, parkingGoalInPixels, self.robot_map)
+                self.curID = 1
+                
+                # TODO: Compute linear and angular velocity from the target point
 
     def joint_state_cb(self, msg):
         dFL, dFR, dBR, dBL = 0.0, 0.0, 0.0, 0.0
