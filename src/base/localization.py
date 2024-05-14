@@ -81,7 +81,6 @@ class MainNode(Node):
             qos_profile=qos_profile_sensor_data
         )
         
-        # TODO: Create Finite state machines for exploration, detection of KLT and grabbing 
         self.state = RobotState.EXPLORATION
         
         self.thread_main = threading.Thread(target=self.thread_main)
@@ -115,6 +114,7 @@ class MainNode(Node):
         self.has_completed_global_plan = False
         
         self.has_rotated_360 = False
+        self.start_yaw_rotation = 0.0
         
         self.front_artag_id = -1
         self.back_artag_id = -1
@@ -160,7 +160,7 @@ class MainNode(Node):
         return target_point
         
     def get_cmd_vel_to_target_point(self, target_point):
-        # TODO: Implement controtller to track target point (PID?)
+        # TODO: Improve controller, use pure pursuit?
         lin_x, ang_z = 0.0, 0.0    
         
         dy = target_point[1] - self.y
@@ -224,10 +224,21 @@ class MainNode(Node):
                 elif not self.has_completed_global_plan:
                     self.follow_global_plan()
                 elif self.has_completed_global_plan:
-                    # TODO: Perform a 360 degree rotation until a KLT is found
-                    if self.has_rotated_360:
+                    if not self.started_rotating_360:
+                        self.start_yaw_rotation = self.yaw
+                        self.started_rotating_360 = True
+                        
+                    # Perform a 360 degree rotation to find KLT
+                    if abs(self.yaw - self.start_yaw_rotation) > 1.9* np.pi:
                         self.reset_global_plan()
+                        self.started_rotating_360 = False
                         continue
+                    
+                    cmd = Twist()
+                    cmd.angular.z = 0.3
+        
+                    self.cmdvel_pub.publish(cmd)
+                    
             elif self.state == RobotState.KLT_DETECTED:
                 # TODO: Try to orientate and find the best gripping position
                 ...
