@@ -398,8 +398,12 @@ class MainNode(Node):
                 
         dFL, dFR, dBL, dBR = self.dFL, self.dFR, self.dBL, self.dBR
         
+        print("dthetas ", dFL, dFR, dBL, dBR)
+        
         dForwardTheta = (dFL + dFR + dBL + dBR) / 4.0
         dRightTheta = (-dBL + dBR + dFL -dFR) / 4.0
+        
+        print("dForwardTheta", dForwardTheta)
         
         dt = 0.001
         cur_time = self.get_clock().now().to_msg()
@@ -409,8 +413,12 @@ class MainNode(Node):
         lin_vel_x = (WHEEL_RADIUS) * (dForwardTheta / dt)
         lin_vel_y = (WHEEL_RADIUS) * (dRightTheta / dt)
         
+        print("lin_vel_x", lin_vel_x)
+        
         dForward = lin_vel_x * dt
         dRight = lin_vel_y * dt
+        
+        print("dforward ", dForward)
         
         # Clockwise rotation matrix
         yaw = self.robot_state.yaw
