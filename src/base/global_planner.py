@@ -10,7 +10,6 @@ def get_backtrack(node, parents : dict):
     res = [node]
     while parents.get(node) != None:
         node = parents.get(node)
-        print("btracking ", node)
         res.append(node)
     return res[::-1]
     
@@ -57,7 +56,7 @@ def get_global_plan_to_unexplored(startInPixels, robot_map):
     Returns a list of (x,y) coordinates in pixel coordinates
     """
     startInPixels = tuple(int(i) for i in startInPixels)
-    goal_check_fn = lambda pos : robot_map[pos[1]][pos[0]] == UNEXPLORED
+    goal_check_fn = lambda pos : pos[0] != 0 and robot_map[pos[0]][pos[1]] == UNEXPLORED
     return search(startInPixels, robot_map, goal_check_fn)
     
 

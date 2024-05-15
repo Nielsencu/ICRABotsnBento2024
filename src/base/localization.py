@@ -14,17 +14,24 @@ from tf_transformations import euler_from_quaternion
 from apriltag_msgs.msg import AprilTagDetectionArray
 
 MAP_WIDTH_M = 5
-MAP_HEIGHT_M = 5
+MAP_HEIGHT_M = 6
 
-MAP_RES = 0.1 # in meters
+EXPLORATION_MAP_RES = 1 # in meters
 
-MAP_WIDTH_IN_PIXELS = int(MAP_WIDTH_M / MAP_RES)
-MAP_HEIGHT_IN_PIXELS = int(MAP_HEIGHT_M / MAP_RES)
+EXPLORATION_MAP_WIDTH_IN_PIXELS = int(MAP_WIDTH_M / EXPLORATION_MAP_RES)
+EXPLORATION_MAP_HEIGHT_IN_PIXELS = int(MAP_HEIGHT_M / EXPLORATION_MAP_RES)
+
+ODOM_MAP_RES = 0.1
+
+ODOM_MAP_WIDTH_IN_PIXELS = int(MAP_WIDTH_M / EXPLORATION_MAP_RES)
+ODOM_MAP_HEIGHT_IN_PIXELS = int(MAP_HEIGHT_M / EXPLORATION_MAP_RES)
 
 MAX_LIN_VEL = 0.15 # m/s
 MAX_ANG_VEL = 0.1 # rad/s 
 
-class RobotState(Enum):
+WHEEL_RADIUS = 10
+
+class FSMState(Enum):
     EXPLORATION = 0
     KLT_DETECTED = 1
     PARKING = 2
@@ -42,8 +49,11 @@ def is_ground_artag(id):
     return 101 <= id <= 130
 
 def get_dt_from_consecutive_msg_in_secs(msg, prev_msg):
-    cur_time_ns = (msg.header.stamp.sec * 10e-9) + msg.header.stamp.nanosec
-    prev_time_ns = (prev_msg.header.stamp.sec * 10e-9) + prev_msg.header.stamp.nanosec
+    return get_dt_from_timestamps(msg.header.stamp, prev_msg.header.stamp)
+
+def get_dt_from_timestamps(cur_stamp, prev_stamp):
+    cur_time_ns = (cur_stamp.sec * 10e-9) + cur_stamp.nanosec
+    prev_time_ns = (prev_stamp.sec * 10e-9) + prev_stamp.nanosec
     return (cur_time_ns - prev_time_ns) * 10e-9
 
 def get_l2_distance(pt1, pt2):
@@ -51,11 +61,33 @@ def get_l2_distance(pt1, pt2):
     dy = pt1[1] - pt2[1]
     return 0.5**(dx*dx + dy*dy) 
 
+def print_valid_artags(detections):
+    for detection in detections:    
+        if is_klt_artag(detection.id):
+            print("Valid KLT artag ID detected in front!", detection.id)
+        elif is_ground_artag(detection.id):
+            print("Valid Ground artag ID detected in front!", detection.id)
+            artag_position = get_position_from_artags_id(detection.id)
+            print("Updated x, y", artag_position)
+
+class RobotState:
+    def __init__(self, x, y, yaw):
+        self.x = x
+        self.y = y
+        self.yaw = yaw
+        
+    def pack_as_tuple_without_yaw(self):
+        return (self.x, self.y)
+    
+    def pack_as_tuple(self):
+        return (self.x, self.y, self.yaw)
+
 class MainNode(Node):
     def __init__(self, config_path, node_name):
         super().__init__(node_name)
         
-        self.robot_map = np.zeros((MAP_WIDTH_IN_PIXELS, MAP_HEIGHT_IN_PIXELS))
+        self.robot_map = np.zeros((ODOM_MAP_HEIGHT_IN_PIXELS, ODOM_MAP_WIDTH_IN_PIXELS))
+        self.exploration_map = np.zeros((EXPLORATION_MAP_HEIGHT_IN_PIXELS, EXPLORATION_MAP_WIDTH_IN_PIXELS))
         
         # Subscription to wheel encoder
         self.joint_fl_sub = self.create_subscription(JointState, '/olive/servo/motor01/joint/state', self.joint_fl_state_cb, QoSProfile(depth=10))
@@ -81,7 +113,7 @@ class MainNode(Node):
             qos_profile=qos_profile_sensor_data
         )
         
-        self.state = RobotState.EXPLORATION
+        self.state = FSMState.EXPLORATION
         
         self.thread_main = threading.Thread(target=self.thread_main)
         self.thread_exited = False
@@ -89,12 +121,10 @@ class MainNode(Node):
         
         self.thread_main.start()
         
-        self.x = 0.0
-        self.y = 0.0
+        self.robot_state = RobotState(0.0, 0.0, 0.0)
         
         self.initial_yaw = 0.0
-        self.yaw = 0.0
-        
+
         self.dFR, self.dBR, self.dBL, self.dFL = 0.0, 0.0, 0.0, 0.0
         
         self.prev_imu_msg = None
@@ -109,62 +139,81 @@ class MainNode(Node):
         self.cur_br_joint_msg = None
         
         self.plan = []
-        self.curPlanID = 0
+        self.curWaypointID = 0
         
         self.has_completed_global_plan = False
         
         self.has_rotated_360 = False
         self.start_yaw_rotation = 0.0
         
-        self.front_artag_id = -1
-        self.back_artag_id = -1
+        self.front_artags = []
+        self.back_artags = []
+        
+        self.klt_artags = []
+        
+        self.parking_artag_id = -1
+        
+        self.last_wheel_odom_estimate = None
         
         # Set up the window for fullscreen or maximizable
         cv2.namedWindow("robotmap", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("robotmap", MAP_WIDTH_IN_PIXELS, MAP_HEIGHT_IN_PIXELS)  # Optional: Set an initial window size
+        cv2.resizeWindow("robotmap", ODOM_MAP_WIDTH_IN_PIXELS, ODOM_MAP_HEIGHT_IN_PIXELS)  # Optional: Set an initial window size
         
     def front_artag_cb(self, msg):
         if len(msg.detections) > 0:
             print("Front camera detections!", len(msg.detections))
-            self.front_artag_id = msg.detections[0].id
+            self.front_artags = msg.detections
+            print_valid_artags(self.front_artags)
             
-        if is_klt_artag(self.front_artag_id):
-            print("Valid KLT artag ID detected in front!", self.front_artag_id)
-        elif is_ground_artag(self.front_artag_id):
-            print("Valid Ground artag ID detected in front!", self.front_artag_id)
-            artag_position = get_position_from_artags_id(self.front_artag_id)
-            self.x, self.y = artag_position
-            print("Updated x, y", self.x, self.y)
+            for artag in self.front_artags:
+                if is_ground_artag(artag.id):
+                    artag_position = get_position_from_artags_id(artag.id)
+                    self.robot_state.x, self.robot_state.y = artag_position
+                    self.exploration_map[artag_position[0]][artag_position[1]] = 1
+                    break
             
     def back_artag_cb(self, msg):
         if len(msg.detections) > 0:
             print("Back camera detections!", len(msg.detections))
-            self.back_artag_id = msg.detections[0].id
+            self.back_artags = msg.detections
+            print_valid_artags(self.back_artags)
             
-        if is_klt_artag(self.back_artag_id):
-            print("Valid KLT artag ID detected at back!", self.back_artag_id)
-        elif is_ground_artag(self.back_artag_id):
-            print("Valid Ground artag ID detected at back!", self.back_artag_id)
-            artag_position = get_position_from_artags_id(self.back_artag_id)
-            self.x, self.y = artag_position
-            print("Updated x, y", self.x, self.y)
+            for artag in self.back_artags:
+                if is_ground_artag(artag.id):
+                    artag_position = get_position_from_artags_id(artag.id)
+                    self.robot_state.x, self.robot_state.y = artag_position
+                    self.exploration_map[artag_position[0]][artag_position[1]] = 1
+                    break
     
     def set_state(self, state):
         self.state = state
         
+    def get_klt_artags(self):
+        klt_artags = []
+        
+        for artag in self.front_artags:
+            if is_klt_artag(artag.id):
+                klt_artags.append(artag)
+                
+        for artag in self.back_artags:
+            if is_klt_artag(artag.id):
+                klt_artags.append(artag)
+                
+        return klt_artags
+        
     def get_global_plan_target_point(self):
         # TODO: Improve target point for global plan
-        
-        target_point = self.plan[self.curPlanID]
-        self.curPlanID += 1
+        target_point = self.plan[self.curWaypointID]
+        if get_l2_distance(self.robot_state.pack_as_tuple(), target_point) <= 0.1:
+            self.curWaypointID += 1
         return target_point
         
     def get_cmd_vel_to_target_point(self, target_point):
         # TODO: Improve controller, use pure pursuit?
         lin_x, ang_z = 0.0, 0.0    
         
-        dy = target_point[1] - self.y
-        dx = target_point[0] - self.x
+        dy = target_point[1] - self.robot_state.y
+        dx = target_point[0] - self.robot_state.x
         
         kp = 0.5
         
@@ -174,11 +223,12 @@ class MainNode(Node):
         
         lin_x = min(forward_err, MAX_LIN_VEL)
         
-        goal_yaw = np.arctan2(dy, dx)
+        # Assuming a x facing forward coordinate system
+        goal_yaw = np.arctan2(dx, dy)
         
         ang_kp = 0.3
         
-        angular_err = ang_kp * (goal_yaw - self.yaw) 
+        angular_err = ang_kp * (goal_yaw - self.robot_state.yaw) 
         
         ang_z = max(min(angular_err, MAX_ANG_VEL), -MAX_ANG_VEL)
         
@@ -196,8 +246,30 @@ class MainNode(Node):
         
     def reset_global_plan(self):
         self.plan = []
-        self.curPlanID = 0
+        self.curWaypointID = 0
         self.has_completed_global_plan = False
+        
+    def is_ready_to_grip(self):
+        return True
+    
+    def grip(self):
+        ...
+        
+    def release_grip(self):
+        ...
+        
+    def get_closer_to_artags(self):
+        ...
+        
+    def has_rotated_360(self):
+        # Perform a 360 degree rotation to find KLT
+        if abs(self.robot_state.yaw - self.start_yaw_rotation) > 1.9* np.pi:
+            self.reset_global_plan()
+            
+        cmd = Twist()
+        cmd.angular.z = 0.3
+
+        self.cmdvel_pub.publish(cmd)
 
     def thread_main(self):
         time.sleep(1)
@@ -207,72 +279,59 @@ class MainNode(Node):
             
             self.update_localization()
             
-            curPosInPixels = (self.x / MAP_RES, self.y / MAP_RES)
+            curPosInPixels = (self.robot_state.x / ODOM_MAP_RES, self.robot_state.y / ODOM_MAP_RES)
             
-            print("Robot state : ", self.state)
+            print("Robot state : ", self.state, " pos ", self.robot_state.pack_as_tuple())
             
             # For each of the robot states, publish cmd_vel
-            if self.state == RobotState.EXPLORATION:
-                if is_klt_artag(self.front_artag_id) or is_klt_artag(self.back_artag_id):
-                    self.set_state(RobotState.KLT_DETECTED)
+            if self.state == FSMState.EXPLORATION:
+                self.klt_artags = self.get_klt_artags()
+                if len(self.klt_artags) > 0:
+                    self.set_state(FSMState.KLT_DETECTED)
                     self.reset_global_plan()
                     continue
                 
                 if len(self.plan) == 0:
                     self.plan = get_global_plan_to_unexplored(curPosInPixels, self.robot_map)
-                    self.curPlanID = 1
+                    print("Plan is ", self.plan)
                 elif not self.has_completed_global_plan:
                     self.follow_global_plan()
                 elif self.has_completed_global_plan:
-                    if not self.started_rotating_360:
-                        self.start_yaw_rotation = self.yaw
-                        self.started_rotating_360 = True
-                        
-                    # Perform a 360 degree rotation to find KLT
-                    if abs(self.yaw - self.start_yaw_rotation) > 1.9* np.pi:
-                        self.reset_global_plan()
-                        self.started_rotating_360 = False
-                        continue
+                    if self.has_rotated_360():
+                        self.set_state(FSMState.EXPLORATION)
                     
-                    cmd = Twist()
-                    cmd.angular.z = 0.3
-        
-                    self.cmdvel_pub.publish(cmd)
-                    
-            elif self.state == RobotState.KLT_DETECTED:
-                # TODO: Try to orientate and find the best gripping position
-                ...
+            elif self.state == FSMState.KLT_DETECTED:
                 
-            elif self.state == RobotState.PARKING:
-                if len(self.plan) == 0:
-                    print("Front ARTag ID: ", self.front_artag_id)
-                    artag_id = -1
-                    if is_klt_artag(self.front_artag_id):
-                        artag_id = self.front_artag_id
-                    elif is_klt_artag(self.back_artag_id):
-                        artag_id = self.back_artag_id
-                    if artag_id == -1:
-                        print("ARTag in the KLT not detected or not valid!!!, setting robot to exploration mode again")
-                        self.set_state(RobotState.EXPLORATION)
-                        self.reset_global_plan()
-                        continue
+                # Set the parking artag id to the first one detected
+                if self.parking_artag_id == -1:
+                    self.parking_artag_id = self.klt_artags[0]
+                    for artag in self.klt_artags:
+                        print("KLT ARTag ID: ", artag.id)
+
+                # TODO: Try to orientate and find the best gripping position
+                if self.is_ready_to_grip():
+                    self.grip()
+                    self.set_state(FSMState.PARKING)
+                    continue
+                self.get_closer_to_artags()
                     
-                    parking_spot_id = artag_id + 100
+            elif self.state == FSMState.PARKING:
+                if len(self.plan) == 0:
+                    parking_spot_id = self.parking_artag_id + 100
                     print("Going to parking spot id of ", parking_spot_id)
                     parkingGoalPos = get_position_from_artags_id(parking_spot_id)
                     print("Parking spot posiiton ", parkingGoalPos)
-                    parkingGoalInPixels = parkingGoalPos * MAP_RES
+                    parkingGoalInPixels = parkingGoalPos * EXPLORATION_MAP_RES
                     
                     self.plan = get_global_plan(curPosInPixels, parkingGoalInPixels, self.robot_map)
-                    self.curPlanID = 1
                 elif not self.has_completed_global_plan:
                     self.follow_global_plan()
                 elif self.has_completed_global_plan:
                     #TODO: Release the gripper to park, probably want to go forward first b4 release?
-                    ...
-                    
+                    self.release_grip()
                     # Set robot state back to exploration for finding gripper
-                    self.set_state(RobotState.EXPLORATION)    
+                    self.set_state(FSMState.EXPLORATION)    
+                    self.parking_artag_id = -1
                     self.reset_global_plan()                    
     
     def imu_cb(self, msg):
@@ -290,10 +349,10 @@ class MainNode(Node):
         # self.yaw = (self.yaw + (msg.angular_velocity.z * dt)) % np.pi
         # print("Yaw is ", self.yaw)
         
-        self.yaw = yaw - self.initial_yaw
+        self.robot_state.yaw = yaw - self.initial_yaw
         
         print(self.get_cmd_vel_to_target_point((1,1)))
-        print("Yaw: ", self.yaw)
+        print("Yaw: ", self.robot_state.yaw)
         
         self.prev_imu_msg = msg
         
@@ -336,29 +395,44 @@ class MainNode(Node):
         # self.prev_fl_joint_msg = self.cur_fl_joint_msg
         # self.prev_br_joint_msg = self.cur_br_joint_msg
         # self.prev_bl_joint_msg = self.cur_bl_joint_msg
-        
+                
         dFL, dFR, dBL, dBR = self.dFL, self.dFR, self.dBL, self.dBR
+        
+        dForwardTheta = (dFL + dFR + dBL + dBR) / 4.0
+        dRightTheta = (-dBL + dBR + dFL -dFR) / 4.0
+        
+        dt = 0.001
+        cur_time = self.get_clock().now().to_msg()
+        if self.last_wheel_odom_estimate is not None:
+            dt = get_dt_from_timestamps(cur_time, self.last_wheel_odom_estimate)
             
-        dForward = (dFL + dFR + dBL + dBR) / 4.0
-        dRight = (-dBL + dBR + dFL -dFR) / 4.0
+        lin_vel_x = (WHEEL_RADIUS) * (dForwardTheta / dt)
+        lin_vel_y = (WHEEL_RADIUS) * (dRightTheta / dt)
+        
+        dForward = lin_vel_x * dt
+        dRight = lin_vel_y * dt
         
         # Clockwise rotation matrix
+        yaw = self.robot_state.yaw
+        
         base2world = np.array([
-            [np.cos(self.yaw), np.sin(self.yaw)],
-            [-np.sin(self.yaw), np.cos(self.yaw)]
+            [np.cos(yaw), np.sin(yaw)],
+            [-np.sin(yaw), np.cos(yaw)]
         ])
         
         dx, dy = np.dot(base2world, np.array([dForward, dRight]))
         
-        self.x += dx
-        self.y += dy
+        self.robot_state.x += dx
+        self.robot_state.y += dy
         
-        xInPixels = int(self.x / MAP_RES)
-        yInPixels = int(self.y / MAP_RES)
+        xInPixels = int(self.robot_state.x / ODOM_MAP_RES)
+        yInPixels = int(self.robot_state.y / ODOM_MAP_RES)
         
-        self.robot_map[yInPixels][xInPixels] = 255
+        self.robot_map[xInPixels][yInPixels] = 255
         
         self.dFL, self.dFR, self.dBL, self.dBR = 0.0, 0.0, 0.0, 0.0
+        
+        self.last_wheel_odom_estimate = cur_time
         
         # cv2.imshow("robotmap", self.robot_map)
         # # Close the window when 'q' is pressed
