@@ -90,10 +90,10 @@ class MainNode(Node):
         self.exploration_map = np.zeros((EXPLORATION_MAP_HEIGHT_IN_PIXELS, EXPLORATION_MAP_WIDTH_IN_PIXELS))
         
         # Subscription to wheel encoder
-        self.joint_fl_sub = self.create_subscription(JointState, '/olive/servo/motor01/joint/state', self.joint_fl_state_cb, QoSProfile(depth=10))
-        self.joint_fr_sub = self.create_subscription(JointState, '/olive/servo/motor02/joint/state', self.joint_fr_state_cb, QoSProfile(depth=10))
-        self.joint_br_sub = self.create_subscription(JointState, '/olive/servo/motor03/joint/state', self.joint_br_state_cb, QoSProfile(depth=10))
-        self.joint_bl_sub = self.create_subscription(JointState, '/olive/servo/motor04/joint/state', self.joint_bl_state_cb, QoSProfile(depth=10))
+        self.joint_fl_sub = self.create_subscription(JointState, '/olive/servo/motor03/joint/state', self.joint_fl_state_cb, QoSProfile(depth=10))
+        self.joint_fr_sub = self.create_subscription(JointState, '/olive/servo/motor04/joint/state', self.joint_fr_state_cb, QoSProfile(depth=10))
+        self.joint_br_sub = self.create_subscription(JointState, '/olive/servo/motor01/joint/state', self.joint_br_state_cb, QoSProfile(depth=10))
+        self.joint_bl_sub = self.create_subscription(JointState, '/olive/servo/motor02/joint/state', self.joint_bl_state_cb, QoSProfile(depth=10))
         
         self.imu_sub = self.create_subscription(Imu, '/olive/imu/imu06/filtered_imu', self.imu_cb, QoSProfile(depth=10))
         
