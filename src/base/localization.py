@@ -86,7 +86,7 @@ class MainNode(Node):
     def __init__(self, config_path, node_name):
         super().__init__(node_name)
         
-        self.robot_map = np.zeros((ODOM_MAP_HEIGHT_IN_PIXELS, ODOM_MAP_WIDTH_IN_PIXELS))
+        self.odom_map = np.zeros((ODOM_MAP_HEIGHT_IN_PIXELS, ODOM_MAP_WIDTH_IN_PIXELS))
         self.exploration_map = np.zeros((EXPLORATION_MAP_HEIGHT_IN_PIXELS, EXPLORATION_MAP_WIDTH_IN_PIXELS))
         
         # Subscription to wheel encoder
@@ -338,7 +338,7 @@ class MainNode(Node):
                     print("Parking spot posiiton ", parkingGoalPos)
                     parkingGoalInPixels = parkingGoalPos * EXPLORATION_MAP_RES
                     
-                    self.plan = get_global_plan(curPosInPixels, parkingGoalInPixels, self.robot_map)
+                    self.plan = get_global_plan(curPosInPixels, parkingGoalInPixels, self.exploration_map)
                 elif not self.has_completed_global_plan:
                     self.follow_global_plan()
                 elif self.has_completed_global_plan:
@@ -450,13 +450,13 @@ class MainNode(Node):
         xInPixels = int(self.robot_state.x / ODOM_MAP_RES)
         yInPixels = int(self.robot_state.y / ODOM_MAP_RES)
         
-        self.robot_map[xInPixels][yInPixels] = 255
+        self.odom_map[xInPixels][yInPixels] = 255
         
         self.dFL, self.dFR, self.dBL, self.dBR = 0.0, 0.0, 0.0, 0.0
         
         self.last_wheel_odom_estimate = cur_time
         
-        # cv2.imshow("robotmap", self.robot_map)
+        # cv2.imshow("odom map", self.odom_map)
         # # Close the window when 'q' is pressed
         # if cv2.waitKey(1) & 0xFF == ord('q'):
         #     cv2.destroyAllWindows()
