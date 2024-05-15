@@ -210,8 +210,10 @@ class MainNode(Node):
     
     def get_diff_drive_control(self, target_point):
         
-        dy = target_point[1] - self.robot_state.y
-        dx = target_point[0] - self.robot_state.x
+        robot_x, robot_y, robot_yaw = self.robot_state.pack_as_tuple()
+        
+        dy = target_point[1] - robot_y
+        dx = target_point[0] - robot_x
         
         kp = 5
         
@@ -226,7 +228,7 @@ class MainNode(Node):
         
         ang_kp = 0.3
         
-        angular_err = ang_kp * (goal_yaw - self.robot_state.yaw) 
+        angular_err = ang_kp * (goal_yaw - robot_yaw) 
         
         ang_z = max(min(angular_err, MAX_ANG_VEL), -MAX_ANG_VEL)
         
@@ -457,6 +459,13 @@ class MainNode(Node):
         self.last_wheel_odom_estimate = cur_time
         
         # cv2.imshow("odom map", self.odom_map)
+        # Close the window when 'q' is pressed
+        # if cv2.waitKey(1) & 0xFF == ord('q'):
+        #     cv2.destroyAllWindows()
+        #     rclpy.shutdown()
+        #     exit()
+            
+        # cv2.imshow("explorations map", self.exploration_map)
         # # Close the window when 'q' is pressed
         # if cv2.waitKey(1) & 0xFF == ord('q'):
         #     cv2.destroyAllWindows()
