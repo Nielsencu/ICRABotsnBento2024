@@ -207,15 +207,13 @@ class MainNode(Node):
         if get_l2_distance(self.robot_state.pack_as_tuple(), target_point) <= 0.1:
             self.curWaypointID += 1
         return target_point
-        
-    def get_cmd_vel_to_target_point(self, target_point):
-        # TODO: Improve controller, use pure pursuit?
-        lin_x, ang_z = 0.0, 0.0    
+    
+    def get_diff_drive_control(self, target_point):
         
         dy = target_point[1] - self.robot_state.y
         dx = target_point[0] - self.robot_state.x
         
-        kp = 0.5
+        kp = 5
         
         dist_to_target = (dy*dy + dx*dx) ** 0.5
         
@@ -232,7 +230,22 @@ class MainNode(Node):
         
         ang_z = max(min(angular_err, MAX_ANG_VEL), -MAX_ANG_VEL)
         
+        if ang_z > 0.1:
+            lin_x = 0.0
+        
         return (lin_x, ang_z)
+    
+    def get_lateral_controller(self, target_point):
+        ...
+        
+    def get_cmd_vel_to_target_point(self, target_point):
+        # TODO: Improve controller, use pure pursuit?
+        lin_x, lin_y, ang_z = 0.0, 0.0, 0.0
+        
+        if True:
+            lin_x, ang_z = self.get_diff_drive_control(target_point)   
+        
+        return (lin_x, lin_y, ang_z)
     
     def follow_global_plan(self):
         target_point = self.get_global_plan_target_point()
@@ -240,7 +253,8 @@ class MainNode(Node):
         
         cmd = Twist()
         cmd.linear.x = cmd_vel[0]
-        cmd.angular.z = cmd_vel[1]
+        cmd.linear.y = cmd_vel[1]
+        cmd.angular.z = cmd_vel[2]
         
         self.cmdvel_pub.publish(cmd)
         
@@ -292,7 +306,8 @@ class MainNode(Node):
                     continue
                 
                 if len(self.plan) == 0:
-                    self.plan = get_global_plan_to_unexplored(curPosInPixels, self.robot_map)
+                    self.plan = [(0, 0), (1, 0), (2, 0)]
+                    # self.plan = get_global_plan_to_unexplored(self.robot_state.pack_as_tuple_without_yaw(), self.exploration_map)
                     print("Plan is ", self.plan)
                 elif not self.has_completed_global_plan:
                     self.follow_global_plan()
@@ -351,7 +366,6 @@ class MainNode(Node):
         
         self.robot_state.yaw = yaw - self.initial_yaw
         
-        print(self.get_cmd_vel_to_target_point((1,1)))
         print("Yaw: ", self.robot_state.yaw)
         
         self.prev_imu_msg = msg
